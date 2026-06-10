@@ -46,8 +46,8 @@ static const float TAU = 6.28318530717959f;
 
 static inline float f_sqrt (float x){ return __builtin_sqrtf(x);  }
 static inline float f_floor(float x){ return __builtin_floorf(x); }
-static inline float f_max  (float a, float b){ return __builtin_fmaxf(a, b); }
-static inline float f_min  (float a, float b){ return __builtin_fminf(a, b); }
+static inline float f_max  (float a, float b){ return a > b ? a : b; }
+static inline float f_min  (float a, float b){ return a < b ? a : b; }
 static inline float clampf (float v, float a, float b){ return f_min(f_max(v, a), b); }
 
 static float f_sin(float x){
@@ -122,15 +122,144 @@ static const float DISK_OUT= 7.0f;
 static const Vec3  DISK_N  = {0.0995f, 0.9950f, 0.0f};   // disk normali (z-eğimi yok: alt/üst eşit görünür)
 static const Vec3  DISK_E1 = {0.9952f, -0.0978f, 0.0f};    // disk içi eksen (doku için)
 
+static Vec3 bhVel = {0.0f, 0.0f, 0.0f};            // dünya birimi/sn (cisim fırlatmada çerçeve düzeltmesi)
+
 static void updateScene(float dt){
     if(animate) animT += dt;
     // kara delik yörüngesi: yana + yukarı-aşağı yavaş döngü
     float a = animT * ORB_W;
     bhPos = BH_CTR + ORB_E1*(ORB_R*f_cos(a)) + ORB_E2*(ORB_R*f_sin(a));
+    bhVel = animate ? (ORB_E1*(-f_sin(a)) + ORB_E2*f_cos(a))*(ORB_R*ORB_W) : Vec3{0,0,0};
     sph[0] = {{ 0.5f, 0.25f + 0.25f*f_sin(animT*0.9f),         6.8f}, 1.75f, {0.10f, 0.80f, 0.15f}, 0.25f};
     sph[1] = {{-1.9f + 0.2f*f_sin(animT*0.7f),
                -0.70f + 0.30f*f_sin(animT*1.3f + 2.0f),        4.9f}, 0.95f, {0.85f, 0.05f, 0.05f}, 0.30f};
     sph[2] = {{ 2.4f, -0.15f + 0.30f*f_sin(animT*1.1f + 4.0f), 6.9f}, 1.45f, {0.05f, 0.10f, 0.85f}, 0.30f};
+}
+
+// ===================================== FIRLATILAN CİSİMLER (tıkla & izle) ====
+// Ekrana tıklayınca o pikselin ışını yönünde kameradan cisim fırlatılır.
+// Cisimler kara delik çerçevesinde (rs=1, c=1) kütleli parçacık jeodeziğiyle
+// hareket eder, gelgit kuvvetiyle spagettileşir, ufka düşünce sönüp yok olur.
+
+static const int   MAX_OBJ    = 20;
+static const float OBJ_R      = 0.09f;   // taban yarıçap (rs birimi; 0.36 dünya b.)
+static const float V0         = 0.25f;   // fırlatma hızı (c) — 10rs'de kaçış ~0.31c altı
+static const float SPAWN_DIST = 1.0f;    // kameranın ne kadar önünden çıkar (dünya b.)
+static const float TIME_SCALE = 8.0f;    // fizik zamanı (rs/c) / duvar saati saniyesi
+static const float KILL_R     = 1.03f;   // bu yarıçapta cisim silinir (rs)
+static const float K_DOP      = 2.0f;    // Doppler ton kazancı
+
+struct Obj {
+    Vec3  posR, velR;          // KD-merkezli konum (rs) ve hız (c) — bhPos hareketli!
+    Vec3  col;                 // taban renk
+    float age;
+    int   alive;
+    float r, stretch, bound;   // kare başı önbellek (updateObjects doldurur)
+    Vec3  axis;                // KD'ye bakan birim uzun eksen
+};
+static Obj objs[MAX_OBJ];
+static int nAlive = 0;
+static u32 spawnCounter = 0;
+
+static const Vec3 PALETTE[8] = {
+    {1.00f,0.85f,0.20f},{0.30f,1.00f,0.50f},{1.00f,0.45f,0.85f},{0.40f,0.80f,1.00f},
+    {1.00f,0.55f,0.15f},{0.75f,0.55f,1.00f},{0.55f,1.00f,0.95f},{1.00f,0.95f,0.80f},
+};
+
+// Schwarzschild kütleli parçacık ivmesi (rs=1, c=1):
+//   a = -(1/(2r²) + (3/2)·h²/r⁴)·r̂ ,  h = |p×v|
+// ISCO=3rs, foton küresi davranışı ve h<2'de yakalanma kendiliğinden çıkar.
+static Vec3 objAccel(Vec3 p, Vec3 v){
+    float r2 = dot(p, p), r = f_sqrt(r2);
+    Vec3 hv = cross(p, v);
+    return p * (-(0.5f/r2 + 1.5f*dot(hv, hv)/(r2*r2)) / r);
+}
+
+static void updateObjects(float dt){
+    nAlive = 0;
+    float T = dt * TIME_SCALE;
+    for(int i = 0; i < MAX_OBJ; i++){
+        Obj& o = objs[i];
+        if(!o.alive) continue;
+        o.age += dt;
+        float t = 0.0f;                               // velocity-Verlet, uyarlanır alt adım
+        for(int s = 0; s < 48 && t < T; s++){
+            float r = len(o.posR);
+            if(r < KILL_R || r > 60.0f){ o.alive = 0; break; }
+            float h = f_min(0.25f, 0.06f*(r - 1.0f));
+            if(h > T - t) h = T - t;
+            Vec3 a0 = objAccel(o.posR, o.velR);
+            o.posR = o.posR + o.velR*h + a0*(0.5f*h*h);
+            Vec3 a1 = objAccel(o.posR, o.velR);
+            o.velR = o.velR + (a0 + a1)*(0.5f*h);
+            t += h;
+        }
+        if(!o.alive) continue;
+        float r = len(o.posR);
+        if(r < KILL_R || r > 60.0f){ o.alive = 0; continue; }
+        o.r    = r;
+        o.axis = norm(o.posR)*-1.0f;
+        // gelgit uzaması: r≥5rs'te küre, r≈1.3rs'te ~5x spagetti
+        float k   = clampf((5.0f - r)/3.7f, 0.0f, 1.0f);
+        o.stretch = 1.0f + 4.0f*k*k;
+        o.bound   = OBJ_R*o.stretch + 0.02f;
+        nAlive++;
+    }
+}
+
+// Işın/segment – elipsoid kesişimi (KD-merkezli rs uzayı, d birim olmalı).
+// Uzun eksen KD'yi gösterir; yarı eksenler (R·s, R/√s, R/√s) → hacim ~korunur.
+static bool hitObj(const Obj& o, Vec3 p0, Vec3 d, float tmax, float& t, Vec3& n){
+    Vec3 u  = o.axis;
+    Vec3 w1 = norm(cross(u, (u.x*u.x < 0.9f) ? Vec3{1,0,0} : Vec3{0,1,0}));
+    Vec3 w2 = cross(u, w1);
+    float sL = OBJ_R*o.stretch, sT = OBJ_R/f_sqrt(o.stretch);
+    Vec3 rel = p0 - o.posR;
+    Vec3 lo = { dot(rel,u)/sL, dot(rel,w1)/sT, dot(rel,w2)/sT };
+    Vec3 ld = { dot(d,  u)/sL, dot(d,  w1)/sT, dot(d,  w2)/sT };
+    float A = dot(ld, ld), B = dot(lo, ld), C = dot(lo, lo) - 1.0f;
+    float disc = B*B - A*C;
+    if(disc < 0.0f || A < 1e-12f) return false;
+    float q  = f_sqrt(disc);
+    float t0 = (-B - q)/A, t1 = (-B + q)/A;
+    t = t0 > 1e-4f ? t0 : t1;
+    if(t < 1e-4f || t > tmax) return false;
+    Vec3 lp = lo + ld*t;                              // birim küre üstündeki nokta
+    n = norm(u*(lp.x/sL) + w1*(lp.y/sT) + w2*(lp.z/sT));
+    return true;
+}
+
+// Cisim rengi: taban renk + üç katmanlı etki
+//  1) Doppler (istek gereği: KD'ye doğru → mavi, uzaklaşırken → kırmızı)
+//  2) kütleçekimsel kızıla kayma √(1−1/r) ile sönme
+//  3) ufka yaklaşırken tam kararma (KILL_R'de ~0 → pat diye yok olmaz)
+static Vec3 objColor(const Obj& o, Vec3 n, Vec3 d){
+    float vr = dot(o.velR, norm(o.posR));             // >0: KD'den uzaklaşıyor
+    Vec3 c = o.col;
+    c = lerp3(c, {0.45f,0.65f,1.00f}, clampf(-vr*K_DOP, 0.0f, 0.7f));
+    c = lerp3(c, {1.00f,0.40f,0.25f}, clampf( vr*K_DOP, 0.0f, 0.7f));
+    float gz   = f_sqrt(f_max(0.0f, 1.0f - 1.0f/o.r));
+    float fade = clampf((o.r - KILL_R)/(1.45f - KILL_R), 0.0f, 1.0f);
+    float lum  = 0.35f + 0.65f*f_max(0.0f, -dot(n, d));
+    return c * (lum * gz * fade);
+}
+
+// Işın başına aday ön filtresi: düz çizgiye uzak cisimler elenir ki 320 adımlık
+// jeodezik yürüyüşü cisim başına test yapmasın. margin, küçük vurma parametreli
+// (çok bükülen) ışınlar için pay bırakır. Dönüş: aday sayısı.
+static int objCandidates(Vec3 p, Vec3 d, float b, int* out){
+    int nc = 0;
+    float margin = 0.4f + 6.0f/f_max(b, 1.0f);
+    for(int i = 0; i < MAX_OBJ; i++){
+        if(!objs[i].alive) continue;
+        Vec3 rel = objs[i].posR - p;
+        float lim = objs[i].bound + margin;
+        float tca = dot(rel, d);
+        if(tca < -lim) continue;                      // tamamen geride
+        Vec3 m = rel - d*tca;
+        if(dot(m, m) < lim*lim) out[nc++] = i;
+    }
+    return nc;
 }
 
 // ============================================================ YILDIZLAR ====
@@ -190,7 +319,16 @@ static Vec3 traceBH(Vec3 oW, Vec3 dW){
     Vec3 d = dW;
     float b = len(cross(p, d));                      // vurma parametresi (ışının uzaklığı)
 
+    int cand[MAX_OBJ], nc = 0;                       // fırlatılan cisim adayları
+    if(nAlive) nc = objCandidates(p, d, b, cand);
+
     if(b > 9.0f){                                    // ZAYIF ALAN: analitik sapma
+        if(nc){                                      // bu dalda yürüyüş yok → düz ışın testi
+            float bt = 1e30f, t; Vec3 nn, bn; int bi = -1;
+            for(int k = 0; k < nc; k++)
+                if(hitObj(objs[cand[k]], p, d, bt, t, nn)){ bt = t; bn = nn; bi = cand[k]; }
+            if(bi >= 0) return objColor(objs[bi], bn, d);
+        }
         float tca = -dot(p, d);
         if(tca > 0.0f){
             Vec3 m = p + d*tca;                      // en yakın geçiş noktası (|m| = b)
@@ -203,21 +341,53 @@ static Vec3 traceBH(Vec3 oW, Vec3 dW){
     for(int i = 0; i < 320; i++){
         float r2 = dot(p, p), r = f_sqrt(r2);
         if(r < 1.0f) return {0, 0, 0};               // OLAY UFKU: ışık kaçamaz
-        if(r > 60.0f && dot(p, d) > 0.0f) return stars(norm(d));
+        if(r > 60.0f && dot(p, d) > 0.0f){
+            Vec3 du = norm(d);
+            if(nc){                                  // kaçarken yan yoldaki cisimler
+                float bt = 1e30f, t; Vec3 nn, bn; int bi = -1;
+                for(int k = 0; k < nc; k++)
+                    if(hitObj(objs[cand[k]], p, du, bt, t, nn)){ bt = t; bn = nn; bi = cand[k]; }
+                if(bi >= 0) return objColor(objs[bi], bn, du);
+            }
+            return stars(du);
+        }
 
         float h  = clampf(0.14f*(r - 0.9f), 0.02f, 2.0f);   // uyarlanır adım
         // Schwarzschild null jeodeziği: a = -(3/2)·h²·p/r⁵
         Vec3 a  = p * (-1.5f*h2 / (r2*r2*r));
         Vec3 pn = p + d*h + a*(0.5f*h*h);
+        Vec3 seg = pn - p;
+
+        // bu adım segmentinde cisim vuruşu? (kesir olarak en yakını)
+        float fObj = 2.0f; int oi = -1; Vec3 onrm = {0,0,0}, du = {0,0,0};
+        if(nc){
+            float L = len(seg);
+            if(L > 1e-6f){
+                du = seg*(1.0f/L);
+                float t; Vec3 nn;
+                for(int k = 0; k < nc; k++){
+                    const Obj& o = objs[cand[k]];
+                    Vec3 rel = o.posR - p;            // hızlı ret: segmente uzak mı?
+                    float tc = clampf(dot(rel, du), 0.0f, L);
+                    Vec3 mm = rel - du*tc;
+                    if(dot(mm, mm) > o.bound*o.bound) continue;
+                    if(hitObj(o, p, du, L, t, nn) && t/L < fObj){ fObj = t/L; oi = cand[k]; onrm = nn; }
+                }
+            }
+        }
 
         // ince disk düzleminden geçiş?
+        float fDisk = 2.0f; Vec3 dhit = {0,0,0}; float rdd = 0.0f;
         float s0 = dot(p, DISK_N), s1 = dot(pn, DISK_N);
         if(s0*s1 < 0.0f){
             float f = s0/(s0 - s1);
-            Vec3 hit = p + (pn - p)*f;
+            Vec3 hit = p + seg*f;
             float rd = len(hit);
-            if(rd > DISK_IN && rd < DISK_OUT) return diskColor(hit, norm(d), rd);
+            if(rd > DISK_IN && rd < DISK_OUT){ fDisk = f; dhit = hit; rdd = rd; }
         }
+        if(oi >= 0 && fObj < fDisk) return objColor(objs[oi], onrm, du);
+        if(fDisk <= 1.0f) return diskColor(dhit, norm(d), rdd);
+
         d = d + a*h;
         p = pn;
     }
@@ -269,6 +439,23 @@ static Vec3 shade(Vec3 o, Vec3 d, int depth){
     float tR; int axis, side;
     bool room = hitRoom(o, d, tR, axis, side);
 
+    // Fırlatılan cisimler oda bölgesinde (ve yansımalarda) düz ışınla test edilir;
+    // ön duvar açıklığının ötesi traceBH'nin işi — tmax duvarda kesildiği için
+    // çift sayım olmaz.
+    if(nAlive){
+        Vec3 pR = (o - bhPos)*(1.0f/RS_W);
+        int cand[MAX_OBJ], nc = objCandidates(pR, d, 1e9f, cand);
+        if(nc){
+            float tmaxW = 1e30f;
+            if(id >= 0 && tS < tmaxW) tmaxW = tS;
+            if(room    && tR < tmaxW) tmaxW = tR;
+            float bt = tmaxW*(1.0f/RS_W), t; Vec3 nn, bn; int bi = -1;
+            for(int k = 0; k < nc; k++)
+                if(hitObj(objs[cand[k]], pR, d, bt, t, nn)){ bt = t; bn = nn; bi = cand[k]; }
+            if(bi >= 0) return objColor(objs[bi], bn, d);
+        }
+    }
+
     Vec3 p, n, alb; float refl = 0.0f, ks;
     if(id >= 0 && (!room || tS < tR)){
         p = o + d*tS; n = norm(p - sph[id].c);
@@ -305,11 +492,17 @@ static Vec3 shade(Vec3 o, Vec3 d, int depth){
     return col;
 }
 
+static const float FOV = 0.70020754f;                // tan(70°/2)
+
+static void camBasis(Vec3& fwd, Vec3& rgt, Vec3& up){
+    fwd = { f_sin(camYaw)*f_cos(camPitch), f_sin(camPitch), f_cos(camYaw)*f_cos(camPitch) };
+    rgt = { f_cos(camYaw), 0.0f, -f_sin(camYaw) };
+    up  = cross(fwd, rgt);
+}
+
 static void render(){
-    Vec3 fwd = { f_sin(camYaw)*f_cos(camPitch), f_sin(camPitch), f_cos(camYaw)*f_cos(camPitch) };
-    Vec3 rgt = { f_cos(camYaw), 0.0f, -f_sin(camYaw) };
-    Vec3 up  = cross(fwd, rgt);
-    const float fov = 0.70020754f;                   // tan(70°/2)
+    Vec3 fwd, rgt, up; camBasis(fwd, rgt, up);
+    const float fov = FOV;
 
     int q = quality;
     for(int y = 0; y < H; y += q){
@@ -340,6 +533,26 @@ EXPORT("drag") void drag(float dx, float dy){        // fare/parmak: etrafına b
     camPitch  = clampf(camPitch - dy*0.004f, -1.4f, 1.4f);
 }
 
+EXPORT("spawn") void spawn(float px, float py){      // tıklanan piksele cisim fırlat
+    Vec3 fwd, rgt, up; camBasis(fwd, rgt, up);
+    float u = (2.0f*(px + 0.5f)/W - 1.0f)*FOV;
+    float v = (1.0f - 2.0f*(py + 0.5f)/H)*FOV;
+    Vec3 dir = norm(fwd + rgt*u + up*v);
+
+    int s = 0; float oldest = -1.0f;                 // boş slot, yoksa en yaşlıyı geri dönüştür
+    for(int i = 0; i < MAX_OBJ; i++){
+        if(!objs[i].alive){ s = i; break; }
+        if(objs[i].age > oldest){ oldest = objs[i].age; s = i; }
+    }
+    Obj& o = objs[s];
+    o.posR = (camPos + dir*SPAWN_DIST - bhPos)*(1.0f/RS_W);
+    o.velR = dir*V0 - bhVel*(1.0f/(RS_W*TIME_SCALE));   // KD çerçevesine geçiş
+    o.col  = PALETTE[spawnCounter++ & 7u];
+    o.age  = 0.0f; o.alive = 1;
+    o.r = len(o.posR); o.axis = norm(o.posR)*-1.0f;     // ilk kare için önbellek
+    o.stretch = 1.0f;  o.bound = OBJ_R + 0.02f;
+}
+
 EXPORT("frame") void frame(float dt, int keys){
     dt = clampf(dt, 0.0f, 0.05f);
     if(keys &  64) camYaw   -= 1.7f*dt;
@@ -348,5 +561,6 @@ EXPORT("frame") void frame(float dt, int keys){
     if(keys & 512) camPitch -= 1.2f*dt;
     camPitch = clampf(camPitch, -1.4f, 1.4f);
     updateScene(dt);
+    updateObjects(dt);                               // cisimler animasyon kapalıyken de uçar
     render();
 }
