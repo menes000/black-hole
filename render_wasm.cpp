@@ -1,9 +1,10 @@
 // ============================================================================
-//  render_wasm.cpp — Piksel piksel 3D motor + KARA DELİK (WebAssembly)
+//  render_wasm.cpp — KARA DELİK + CİSİM FIRLATMA (WebAssembly)
 //
-//  Kamera sabittir; sürükleyerek etrafına bakılır. Önde damalı oda ve üç
-//  yansıtıcı küre; arkadaki duvar uzaya açılır ve orada gerçek fizikle
-//  render edilen bir Schwarzschild kara deliği vardır:
+//  Kamera uzayda sabittir, başlangıçta kara deliğe bakar; sürükleyerek
+//  etrafına bakılır, tıklayınca o yönde cisim fırlatılır. (Damalı oda ve üç
+//  yansıtıcı küre ayrı demoya taşındı: oda_wasm.cpp / oda.html.)
+//  Gerçek fizikle render edilen bir Schwarzschild kara deliği:
 //
 //   • Işık ışınları kara deliğin yakınında DÜZ GİTMEZ: genel göreliliğin
 //     null jeodezik denklemi adım adım entegre edilir:
@@ -18,14 +19,12 @@
 //       - kütleçekimsel kızıla kayma √(1 - rs/r)
 //   • Uzak ışınlar (b > 9·rs) için birinci dereceden kesin sapma α = 2·rs/b
 //     analitik uygulanır (hız için); yakın ışınlar tam entegre edilir.
-//   • Arka plan yıldızları merceklenmeyle yay biçiminde bükülür; kara delik
-//     kürelerin AYNA YANSIMASINDA da görünür (ışınlar özyinelemeli).
+//   • Arka plan yıldızları merceklenmeyle yay biçiminde bükülür.
 //
-//  Yaklaştırmalar: oda içindeki ışınlar düz kabul edilir (sapma < ~1°),
-//  disk geometrik olarak ince ve opaktır.
+//  Yaklaştırma: disk geometrik olarak ince ve opaktır.
 //
 //  SIFIR bağımlılık: SDL yok, stdlib yok, libm yok, Emscripten yok.
-//  Derleme: ./build.sh  (clang --target=wasm32 + index.html'e base64 gömme)
+//  Derleme: ./build.sh  (zig c++ -target wasm32-freestanding + base64 gömme)
 // ============================================================================
 
 #define EXPORT(isim) extern "C" __attribute__((export_name(isim), used))
@@ -59,10 +58,6 @@ static float f_sin(float x){
 }
 static inline float f_cos(float x){ return f_sin(x + PI*0.5f); }
 
-static inline float pow48(float x){
-    float x2 = x*x, x4 = x2*x2, x8 = x4*x4, x16 = x8*x8, x32 = x16*x16;
-    return x32 * x16;
-}
 static inline u32 wang(u32 h){               // tamsayı karma (yıldızlar için)
     h = (h ^ 61u) ^ (h >> 16); h *= 9u; h ^= h >> 4;
     h *= 0x27d4eb2du; h ^= h >> 15; return h;
@@ -79,7 +74,6 @@ static inline Vec3  cross(Vec3 a, Vec3 b){
 }
 static inline float len (Vec3 a){ return f_sqrt(dot(a, a)); }
 static inline Vec3  norm(Vec3 a){ float l = len(a); return l > 1e-8f ? a*(1.0f/l) : Vec3{0,0,0}; }
-static inline Vec3  reflect(Vec3 v, Vec3 n){ return v - n*(2.0f*dot(v, n)); }
 static inline Vec3  lerp3(Vec3 a, Vec3 b, float t){ return a + (b - a)*t; }
 
 // -------------------------------------------------------------- framebuffer
@@ -95,17 +89,10 @@ static inline u32 packRGBA(Vec3 c){
 
 // ------------------------------------------------------------ sahne durumu
 static const Vec3 camPos = {0.0f, 0.0f, 0.35f};   // KAMERA SABİT — hareket yok
-static float camYaw = 0.0f, camPitch = 0.0f;
+static float camYaw = PI, camPitch = 0.0f;        // başlangıçta kara deliğe bak (-z)
 static int   animate = 1;
 static float animT   = 1.2f;
 static int   quality = 2;
-
-struct Sphere { Vec3 c; float r; Vec3 col; float refl; };
-static Sphere sph[3];
-
-static const Vec3 roomMin  = {-5.0f, -2.5f, -1.0f};
-static const Vec3 roomMax  = { 5.0f,  2.5f, 12.0f};
-static const Vec3 lightPos = { 0.0f,  1.9f,  3.0f};
 
 // ---- kara delik: rs = 1 birim olacak şekilde yerel ölçek ----
 static const float RS_W    = 4.0f;                  // Schwarzschild yarıçapı (dünya birimi) — 2x
@@ -130,10 +117,6 @@ static void updateScene(float dt){
     float a = animT * ORB_W;
     bhPos = BH_CTR + ORB_E1*(ORB_R*f_cos(a)) + ORB_E2*(ORB_R*f_sin(a));
     bhVel = animate ? (ORB_E1*(-f_sin(a)) + ORB_E2*f_cos(a))*(ORB_R*ORB_W) : Vec3{0,0,0};
-    sph[0] = {{ 0.5f, 0.25f + 0.25f*f_sin(animT*0.9f),         6.8f}, 1.75f, {0.10f, 0.80f, 0.15f}, 0.25f};
-    sph[1] = {{-1.9f + 0.2f*f_sin(animT*0.7f),
-               -0.70f + 0.30f*f_sin(animT*1.3f + 2.0f),        4.9f}, 0.95f, {0.85f, 0.05f, 0.05f}, 0.30f};
-    sph[2] = {{ 2.4f, -0.15f + 0.30f*f_sin(animT*1.1f + 4.0f), 6.9f}, 1.45f, {0.05f, 0.10f, 0.85f}, 0.30f};
 }
 
 // ===================================== FIRLATILAN CİSİMLER (tıkla & izle) ====
@@ -143,8 +126,10 @@ static void updateScene(float dt){
 
 static const int   MAX_OBJ    = 20;
 static const float OBJ_R      = 0.09f;   // taban yarıçap (rs birimi; 0.36 dünya b.)
-static const float V0         = 0.25f;   // fırlatma hızı (c) — 10rs'de kaçış ~0.31c altı
-static const float SPAWN_DIST = 1.0f;    // kameranın ne kadar önünden çıkar (dünya b.)
+static const float V0         = 0.28f;   // fırlatma hızı (c); köşe tıklamada
+                                         // h = r·v_perp ≈ 10·0.28·sin(~60°) ≈ 2.4 > 2 → yörünge
+                                         // merkez tıklamada v_perp≈0, h<2 → dalış
+static const float SPAWN_DIST = 2.0f;    // kameranın ne kadar önünden çıkar (dünya b.)
 static const float TIME_SCALE = 8.0f;    // fizik zamanı (rs/c) / duvar saati saniyesi
 static const float KILL_R     = 1.03f;   // bu yarıçapta cisim silinir (rs)
 static const float K_DOP      = 2.0f;    // Doppler ton kazancı
@@ -246,18 +231,27 @@ static Vec3 objColor(const Obj& o, Vec3 n, Vec3 d){
 
 // Işın başına aday ön filtresi: düz çizgiye uzak cisimler elenir ki 320 adımlık
 // jeodezik yürüyüşü cisim başına test yapmasın. margin, küçük vurma parametreli
-// (çok bükülen) ışınlar için pay bırakır. Dönüş: aday sayısı.
-static int objCandidates(Vec3 p, Vec3 d, float b, int* out){
+// (çok bükülen) ışınlar için pay bırakır; [t0,t1] penceresi yürüyüş sırasında
+// yalnız cisme yakın yol diliminde test yapılmasını sağlar. Dönüş: aday sayısı.
+struct Cand { int i; float t0, t1; };
+
+static int objCandidates(Vec3 p, Vec3 d, float b, Cand* out){
     int nc = 0;
-    float margin = 0.4f + 6.0f/f_max(b, 1.0f);
+    float bend = 2.0f/f_max(b, 0.7f);                 // toplam Einstein sapması (rad)
     for(int i = 0; i < MAX_OBJ; i++){
         if(!objs[i].alive) continue;
         Vec3 rel = objs[i].posR - p;
-        float lim = objs[i].bound + margin;
         float tca = dot(rel, d);
-        if(tca < -lim) continue;                      // tamamen geride
-        Vec3 m = rel - d*tca;
-        if(dot(m, m) < lim*lim) out[nc++] = i;
+        if(tca < -(objs[i].bound + 0.5f)) continue;   // tamamen geride
+        float m2 = dot(rel, rel) - tca*tca;
+        // KRİTİK: ışın en yakın geçişten sonra KD'ye doğru kayar; düz çizgiden
+        // sapma ≈ bükülme·yol olur. Pay buna göre ölçeklenmezse uçuştaki cisim
+        // "çizgiden uzak" diye elenir ve ekranda bir anda görünmez olur.
+        float lim = objs[i].bound + 0.5f + bend*f_max(tca, 0.0f);
+        if(m2 < lim*lim){
+            float slack = 2.0f + 0.6f*bend*f_max(tca, 0.0f);
+            out[nc++] = { i, tca - objs[i].bound - slack, tca + objs[i].bound + slack };
+        }
     }
     return nc;
 }
@@ -319,18 +313,12 @@ static Vec3 traceBH(Vec3 oW, Vec3 dW){
     Vec3 d = dW;
     float b = len(cross(p, d));                      // vurma parametresi (ışının uzaklığı)
 
-    int cand[MAX_OBJ], nc = 0;                       // fırlatılan cisim adayları
+    Cand cand[MAX_OBJ]; int nc = 0;                  // fırlatılan cisim adayları
     if(nAlive) nc = objCandidates(p, d, b, cand);
 
-    if(b > 9.0f){                                    // ZAYIF ALAN: analitik sapma
-        if(nc){                                      // bu dalda yürüyüş yok → düz ışın testi
-            float bt = 1e30f, t; Vec3 nn, bn; int bi = -1;
-            for(int k = 0; k < nc; k++)
-                if(hitObj(objs[cand[k]], p, d, bt, t, nn)){ bt = t; bn = nn; bi = cand[k]; }
-            if(bi >= 0) return objColor(objs[bi], bn, d);
-        }
-        float tca = -dot(p, d);
-        if(tca > 0.0f){
+    if(b > 9.0f && nc == 0){                         // ZAYIF ALAN: analitik sapma
+        float tca = -dot(p, d);                      // (aday cisim varsa kısayol atlanır:
+        if(tca > 0.0f){                              //  yürüyüş cismi bükülmüş yolda yakalar)
             Vec3 m = p + d*tca;                      // en yakın geçiş noktası (|m| = b)
             d = norm(d - m*(2.0f/(b*b)));            // Einstein sapması: α = 2·rs/b
         }
@@ -338,6 +326,7 @@ static Vec3 traceBH(Vec3 oW, Vec3 dW){
     }
 
     float h2 = b*b;                                  // korunan açısal momentum karesi
+    float s  = 0.0f;                                 // kat edilen yol (pencere kırpması için)
     for(int i = 0; i < 320; i++){
         float r2 = dot(p, p), r = f_sqrt(r2);
         if(r < 1.0f) return {0, 0, 0};               // OLAY UFKU: ışık kaçamaz
@@ -346,7 +335,7 @@ static Vec3 traceBH(Vec3 oW, Vec3 dW){
             if(nc){                                  // kaçarken yan yoldaki cisimler
                 float bt = 1e30f, t; Vec3 nn, bn; int bi = -1;
                 for(int k = 0; k < nc; k++)
-                    if(hitObj(objs[cand[k]], p, du, bt, t, nn)){ bt = t; bn = nn; bi = cand[k]; }
+                    if(hitObj(objs[cand[k].i], p, du, bt, t, nn)){ bt = t; bn = nn; bi = cand[k].i; }
                 if(bi >= 0) return objColor(objs[bi], bn, du);
             }
             return stars(du);
@@ -366,14 +355,17 @@ static Vec3 traceBH(Vec3 oW, Vec3 dW){
                 du = seg*(1.0f/L);
                 float t; Vec3 nn;
                 for(int k = 0; k < nc; k++){
-                    const Obj& o = objs[cand[k]];
+                    const Cand& ck = cand[k];
+                    if(s + L < ck.t0 || s > ck.t1) continue;   // pencere dışı
+                    const Obj& o = objs[ck.i];
                     Vec3 rel = o.posR - p;            // hızlı ret: segmente uzak mı?
                     float tc = clampf(dot(rel, du), 0.0f, L);
                     Vec3 mm = rel - du*tc;
                     if(dot(mm, mm) > o.bound*o.bound) continue;
-                    if(hitObj(o, p, du, L, t, nn) && t/L < fObj){ fObj = t/L; oi = cand[k]; onrm = nn; }
+                    if(hitObj(o, p, du, L, t, nn) && t/L < fObj){ fObj = t/L; oi = ck.i; onrm = nn; }
                 }
             }
+            s += L;
         }
 
         // ince disk düzleminden geçiş?
@@ -394,104 +386,6 @@ static Vec3 traceBH(Vec3 oW, Vec3 dW){
     return {0, 0, 0};                                // foton küresinde dolanıp kaldı
 }
 
-// ============================================================ RAYTRACER ====
-static bool hitSphere(const Sphere& s, Vec3 o, Vec3 d, float& t){
-    Vec3 oc = o - s.c;
-    float b = dot(oc, d), c = dot(oc, oc) - s.r*s.r;
-    float disc = b*b - c;
-    if(disc < 0) return false;
-    float q  = f_sqrt(disc);
-    float t0 = -b - q, t1 = -b + q;
-    t = t0 > 1e-3f ? t0 : t1;
-    return t > 1e-3f;
-}
-
-static bool hitRoom(Vec3 o, Vec3 d, float& t, int& axis, int& side){
-    const float mn[3] = {roomMin.x, roomMin.y, roomMin.z};
-    const float mx[3] = {roomMax.x, roomMax.y, roomMax.z};
-    const float oo[3] = {o.x, o.y, o.z};
-    const float dd[3] = {d.x, d.y, d.z};
-    t = 1e30f; axis = -1; side = 0;
-    for(int a = 0; a < 3; a++){
-        if(dd[a] >  1e-6f){ float tt = (mx[a]-oo[a])/dd[a]; if(tt > 1e-3f && tt < t){ t = tt; axis = a; side = +1; } }
-        if(dd[a] < -1e-6f){ float tt = (mn[a]-oo[a])/dd[a]; if(tt > 1e-3f && tt < t){ t = tt; axis = a; side = -1; } }
-    }
-    return axis >= 0;
-}
-
-static inline bool checker(float a, float b){
-    return (((int)f_floor(a) + (int)f_floor(b)) & 1) == 0;
-}
-
-static Vec3 wallColor(Vec3 p, int axis, int side){
-    if(axis == 1)
-        return checker(p.x*0.9f, p.z*0.9f) ? Vec3{0.92f,0.92f,0.97f} : Vec3{0.06f,0.15f,0.85f};
-    if(axis == 0){
-        Vec3 tint = side < 0 ? Vec3{0.95f,0.15f,0.95f} : Vec3{0.10f,0.85f,0.80f};
-        return checker(p.y*0.9f, p.z*0.9f) ? tint : tint*0.45f;
-    }
-    return {0.02f, 0.02f, 0.02f};                    // arka duvar (z=12): karanlık
-}
-
-static Vec3 shade(Vec3 o, Vec3 d, int depth){
-    float tS = 1e30f; int id = -1;
-    for(int i = 0; i < 3; i++){ float t; if(hitSphere(sph[i], o, d, t) && t < tS){ tS = t; id = i; } }
-    float tR; int axis, side;
-    bool room = hitRoom(o, d, tR, axis, side);
-
-    // Fırlatılan cisimler oda bölgesinde (ve yansımalarda) düz ışınla test edilir;
-    // ön duvar açıklığının ötesi traceBH'nin işi — tmax duvarda kesildiği için
-    // çift sayım olmaz.
-    if(nAlive){
-        Vec3 pR = (o - bhPos)*(1.0f/RS_W);
-        int cand[MAX_OBJ], nc = objCandidates(pR, d, 1e9f, cand);
-        if(nc){
-            float tmaxW = 1e30f;
-            if(id >= 0 && tS < tmaxW) tmaxW = tS;
-            if(room    && tR < tmaxW) tmaxW = tR;
-            float bt = tmaxW*(1.0f/RS_W), t; Vec3 nn, bn; int bi = -1;
-            for(int k = 0; k < nc; k++)
-                if(hitObj(objs[cand[k]], pR, d, bt, t, nn)){ bt = t; bn = nn; bi = cand[k]; }
-            if(bi >= 0) return objColor(objs[bi], bn, d);
-        }
-    }
-
-    Vec3 p, n, alb; float refl = 0.0f, ks;
-    if(id >= 0 && (!room || tS < tR)){
-        p = o + d*tS; n = norm(p - sph[id].c);
-        alb = sph[id].col; refl = sph[id].refl; ks = 0.50f;
-    } else if(room){
-        p = o + d*tR;
-        if(axis == 2 && side < 0)                    // ÖN DUVAR YOK: uzaya açılır
-            return traceBH(p, d);                    // → kara delik + yıldızlar
-        n = {0,0,0};
-        if(axis == 0) n.x = (float)-side; else if(axis == 1) n.y = (float)-side; else n.z = (float)-side;
-        alb = wallColor(p, axis, side); ks = 0.06f;
-    } else return {0, 0, 0};
-
-    Vec3 L = lightPos - p; float dl = len(L); L = L*(1.0f/dl);
-    float diff = f_max(0.0f, dot(n, L));
-
-    float shadow = 1.0f;
-    for(int i = 0; i < 3; i++){
-        if(i == id) continue;
-        float t; if(hitSphere(sph[i], p + n*1e-3f, L, t) && t < dl){ shadow = 0.35f; break; }
-    }
-
-    float atten = 1.0f / (1.0f + 0.012f*dl*dl);
-    float lum   = 0.27f + 0.95f*diff*shadow*atten;
-    Vec3 col = {alb.x*lum, alb.y*lum, alb.z*lum};
-
-    if(diff > 0.0f && shadow > 0.9f){
-        Vec3 hv = norm(L - d);
-        float sp = ks * pow48(f_max(0.0f, dot(n, hv))) * atten;
-        col = col + Vec3{sp, sp, sp};
-    }
-    if(refl > 0.0f && depth < 2)                     // kara delik yansımalarda da görünür
-        col = col*(1.0f - refl) + shade(p + n*1e-3f, norm(reflect(d, n)), depth + 1)*refl;
-    return col;
-}
-
 static const float FOV = 0.70020754f;                // tan(70°/2)
 
 static void camBasis(Vec3& fwd, Vec3& rgt, Vec3& up){
@@ -509,7 +403,7 @@ static void render(){
         for(int x = 0; x < W; x += q){
             float u = (2.0f*(x + 0.5f)/W - 1.0f) * fov;
             float v = (1.0f - 2.0f*(y + 0.5f)/H) * fov;
-            u32 c = packRGBA(shade(camPos, norm(fwd + rgt*u + up*v), 0));
+            u32 c = packRGBA(traceBH(camPos, norm(fwd + rgt*u + up*v)));
             for(int j = 0; j < q && y+j < H; j++)
                 for(int i = 0; i < q && x+i < W; i++)
                     fb[(y+j)*W + (x+i)] = c;
@@ -551,6 +445,12 @@ EXPORT("spawn") void spawn(float px, float py){      // tıklanan piksele cisim 
     o.age  = 0.0f; o.alive = 1;
     o.r = len(o.posR); o.axis = norm(o.posR)*-1.0f;     // ilk kare için önbellek
     o.stretch = 1.0f;  o.bound = OBJ_R + 0.02f;
+}
+
+EXPORT("obj_alive") int obj_alive(){                 // canlı cisim sayısı (test/teşhis)
+    int n = 0;
+    for(int i = 0; i < MAX_OBJ; i++) n += objs[i].alive ? 1 : 0;
+    return n;
 }
 
 EXPORT("frame") void frame(float dt, int keys){
