@@ -1,20 +1,20 @@
 #!/bin/sh
-# İki demo derlenir ve her wasm kendi html'ine base64 gömülür:
-#   render_wasm.cpp → render.wasm → index.html  (kara delik + cisim fırlatma)
-#   oda_wasm.cpp    → oda.wasm    → oda.html    (damalı oda + 3 yansıtıcı küre)
-# Gereksinim: zig (brew install zig), python3.
+# Both demos are compiled and each wasm is base64-embedded into its own html:
+#   render_wasm.cpp → render.wasm → index.html  (black hole + object launch)
+#   oda_wasm.cpp    → oda.wasm    → oda.html    (checkered room + 3 reflective spheres)
+# Requirements: zig (brew install zig), python3.
 set -e
 cd "$(dirname "$0")"
 
-derle(){
+compile(){
   zig c++ -target wasm32-freestanding -O2 \
     -nostdlib -ffreestanding -fno-exceptions -fno-rtti -fvisibility=hidden \
     -Wl,--no-entry -Wl,-z,stack-size=131072 -Wl,--strip-all \
     -o "$2" "$1"
 }
 
-derle render_wasm.cpp render.wasm
-derle oda_wasm.cpp    oda.wasm
+compile render_wasm.cpp render.wasm
+compile oda_wasm.cpp    oda.wasm
 
 python3 - <<'EOF'
 import base64, re, pathlib
