@@ -2,6 +2,8 @@
 
 Real-time Schwarzschild black hole ray tracer written in C++, compiled to WebAssembly, embedded as a single self-contained HTML file. No server required — open by double-clicking.
 
+<video src="demo.mp4" autoplay loop muted playsinline></video>
+
 ## Demos
 
 | File | Description |
