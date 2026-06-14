@@ -125,12 +125,14 @@ static void updateScene(float dt){
 // hareket eder, gelgit kuvvetiyle spagettileşir, ufka düşünce sönüp yok olur.
 
 static const int   MAX_OBJ    = 20;
-static const float OBJ_R      = 0.09f;   // taban yarıçap (rs birimi; 0.36 dünya b.)
-static const float V0         = 0.28f;   // fırlatma hızı (c); köşe tıklamada
-                                         // h = r·v_perp ≈ 10·0.28·sin(~60°) ≈ 2.4 > 2 → yörünge
-                                         // merkez tıklamada v_perp≈0, h<2 → dalış
+static const float OBJ_R      = 0.15f;   // taban yarıçap (rs birimi; 0.6 dünya b.)
+static const float V0         = 0.28f;   // fırlatma hızı (c). KD'den uzağa nişanlı köşe
+                                         // tıklamada h≈2.2 → peri≈4rs → kalıcı yörünge;
+                                         // merkeze yakın tıklamada h<2 → dalış.
+                                         // E<0 (bağlı), apoapsis ≈ 33rs → geri döner
 static const float SPAWN_DIST = 2.0f;    // kameranın ne kadar önünden çıkar (dünya b.)
-static const float TIME_SCALE = 8.0f;    // fizik zamanı (rs/c) / duvar saati saniyesi
+static const float TIME_SCALE = 12.0f;   // fizik zamanı (rs/c) / duvar saati saniyesi
+                                         // (yörünge turu ~40sn, merkez dalışı ~2sn)
 static const float KILL_R     = 1.03f;   // bu yarıçapta cisim silinir (rs)
 static const float K_DOP      = 2.0f;    // Doppler ton kazancı
 
@@ -177,6 +179,14 @@ static void updateObjects(float dt){
             o.posR = o.posR + o.velR*h + a0*(0.5f*h*h);
             Vec3 a1 = objAccel(o.posR, o.velR);
             o.velR = o.velR + (a0 + a1)*(0.5f*h);
+            // Gelgit sürtünmesi: gölgeyi sıyıran geçişlerde (r<3.2rs) cisim gelgit
+            // ısınmasıyla enerji yitirir → "çok yakın geçip kaçma" olmaz; sıyıran
+            // cisim her turda biraz düşer, 2-4 geçişte kapılır. peri≥4rs yörüngeler
+            // bölgeye hiç girmediğinden kalıcı kalır.
+            if(r < 3.2f){
+                float drag = (3.2f - r)*0.11f;
+                o.velR = o.velR*(1.0f - f_min(drag*h, 0.5f));
+            }
             t += h;
         }
         if(!o.alive) continue;
@@ -451,6 +461,10 @@ EXPORT("obj_alive") int obj_alive(){                 // canlı cisim sayısı (t
     int n = 0;
     for(int i = 0; i < MAX_OBJ; i++) n += objs[i].alive ? 1 : 0;
     return n;
+}
+
+EXPORT("obj_r") float obj_r(int i){                  // i. cismin KD uzaklığı, rs (test/teşhis)
+    return (i >= 0 && i < MAX_OBJ && objs[i].alive) ? objs[i].r : -1.0f;
 }
 
 EXPORT("frame") void frame(float dt, int keys){
