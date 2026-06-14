@@ -1,15 +1,15 @@
 // ============================================================================
-//  oda_wasm.cpp — Piksel piksel 3D motor: DAMALI ODA + 3 YANSITICI KÜRE
+//  oda_wasm.cpp — Pixel by pixel 3D engine: CHECKERED ROOM + 3 REFLECTIVE SPHERES
 //
-//  render_wasm.cpp'den ayrıldı: burada kara delik YOK. Kapalı damalı oda,
-//  içinde salınan üç yansıtıcı küre, Blinn-Phong ışık + gölge + özyinelemeli
-//  yansıma (derinlik 2). Kamera sabittir; sürükleyerek etrafına bakılır.
+//  Split from render_wasm.cpp: no black hole here. Closed checkered room,
+//  three bouncing reflective spheres, Blinn-Phong lighting + shadow + recursive
+//  reflections (depth 2). Camera is fixed; drag to look around.
 //
-//  SIFIR bağımlılık: SDL yok, stdlib yok, libm yok, Emscripten yok.
-//  Derleme: ./build.sh  (zig c++ -target wasm32-freestanding + base64 gömme)
+//  ZERO dependencies: no SDL, no stdlib, no libm, no Emscripten.
+//  Build: ./build.sh  (zig c++ -target wasm32-freestanding + base64 embedding)
 // ============================================================================
 
-#define EXPORT(isim) extern "C" __attribute__((export_name(isim), used))
+#define EXPORT(name) extern "C" __attribute__((export_name(name), used))
 
 typedef unsigned int  u32;
 typedef unsigned char u8;
@@ -21,7 +21,7 @@ extern "C" void* memcpy(void* d, const void* s, __SIZE_TYPE__ n){
     u8* p = (u8*)d; const u8* q = (const u8*)s; while(n--) *p++ = *q++; return d;
 }
 
-// ------------------------------------------------- mini matematik (libm yok)
+// ------------------------------------------------- mini math (no libm)
 static const float PI  = 3.14159265358979f;
 static const float TAU = 6.28318530717959f;
 
@@ -45,7 +45,7 @@ static inline float pow48(float x){
     return x32 * x16;
 }
 
-// ------------------------------------------------------------ vektör matematiği
+// ------------------------------------------------------------ vector math
 struct Vec3 { float x, y, z; };
 static inline Vec3  operator+(Vec3 a, Vec3 b){ return {a.x+b.x, a.y+b.y, a.z+b.z}; }
 static inline Vec3  operator-(Vec3 a, Vec3 b){ return {a.x-b.x, a.y-b.y, a.z-b.z}; }
@@ -69,8 +69,8 @@ static inline u32 packRGBA(Vec3 c){
     return 0xFF000000u | ((u32)b << 16) | ((u32)g << 8) | (u32)r;
 }
 
-// ------------------------------------------------------------ sahne durumu
-static const Vec3 camPos = {0.0f, 0.0f, 0.35f};   // KAMERA SABİT — hareket yok
+// ------------------------------------------------------------ scene state
+static const Vec3 camPos = {0.0f, 0.0f, 0.35f};   // CAMERA FIXED — no movement
 static float camYaw = 0.0f, camPitch = 0.0f;
 static int   animate = 1;
 static float animT   = 1.2f;
@@ -127,7 +127,7 @@ static Vec3 wallColor(Vec3 p, int axis, int side){
         Vec3 tint = side < 0 ? Vec3{0.95f,0.15f,0.95f} : Vec3{0.10f,0.85f,0.80f};
         return checker(p.y*0.9f, p.z*0.9f) ? tint : tint*0.45f;
     }
-    // z duvarları: oda kapalı — arka koyu, ön (kameranın arkası) hafif damalı gri
+    // z walls: room is closed — back dark, front (behind camera) lightly checkered grey
     if(side > 0) return {0.02f, 0.02f, 0.02f};
     return checker(p.x*0.9f, p.y*0.9f) ? Vec3{0.30f,0.30f,0.34f} : Vec3{0.12f,0.12f,0.15f};
 }
@@ -191,8 +191,8 @@ static void render(){
     }
 }
 
-// =================================================== JS'E AÇILAN ARAYÜZ ====
-// keys bit maskesi: 64=sol bak 128=sağ bak 256=yukarı bak 512=aşağı bak
+// =================================================== EXPORTED JS INTERFACE ====
+// keys bitmask: 64=look left 128=look right 256=look up 512=look down
 
 EXPORT("fb_ptr")  u32* fb_ptr(){ return fb; }
 EXPORT("fb_w")    int  fb_w(){ return W; }
@@ -202,7 +202,7 @@ EXPORT("set_quality") void set_quality(int q){ quality = q < 1 ? 1 : (q > 4 ? 4 
 EXPORT("get_quality") int  get_quality(){ return quality; }
 EXPORT("toggle_anim") int  toggle_anim(){ animate = !animate; return animate; }
 
-EXPORT("drag") void drag(float dx, float dy){        // fare/parmak: etrafına bak
+EXPORT("drag") void drag(float dx, float dy){        // mouse/touch: look around
     camYaw   += dx*0.004f;
     camPitch  = clampf(camPitch - dy*0.004f, -1.4f, 1.4f);
 }

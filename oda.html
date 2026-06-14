@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="tr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>piksel piksel 3D — damalı oda</title>
+<title>pixel by pixel 3D — checkered room</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; margin: 0; }
@@ -40,15 +40,15 @@
 <body>
 
 <header>
-  <h1>piksel piksel 3D <span style="color:#5b89c9">· damalı oda</span></h1>
+  <h1>pixel by pixel 3D <span style="color:#5b89c9">· checkered room</span></h1>
   <div class="grp">
-    <span style="color:#717a87">kalite</span>
+    <span style="color:#717a87">quality</span>
     <button data-q="1">1</button>
     <button data-q="2">2</button>
     <button data-q="3">3</button>
-    <button id="autoQ" class="on">oto</button>
+    <button id="autoQ" class="on">auto</button>
   </div>
-  <button id="animBtn" class="on">animasyon</button>
+  <button id="animBtn" class="on">animation</button>
   <span id="fps">—</span>
 </header>
 
@@ -56,35 +56,35 @@
   <canvas id="cv"></canvas>
 </div>
 
-<p id="hint">Kamera sabit — <b>sürükleyerek etrafına bak</b> · damalı oda, üç yansıtıcı küre ·
-ok tuşlarıyla da bakabilirsin · Boşluk: animasyon · 1/2/3: kalite</p>
+<p id="hint">Camera fixed — <b>drag to look around</b> · checkered room, three reflective spheres ·
+arrow keys also work · Space: animation · 1/2/3: quality</p>
 
 <div id="err"></div>
 
 <script>
-// oda.wasm bu satıra gömülüdür (build.sh tarafından üretilir) — bu sayede
-// sayfa TEK dosyadır: sunucu gerekmez, çift tıklayınca (file://) bile çalışır.
+// oda.wasm is embedded in this line (produced by build.sh) — so the page
+// is a SINGLE file: no server needed, works even by double-clicking (file://).
 const WASM_B64="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";
 
 (async () => {
   const $ = s => document.querySelector(s);
   const err = m => { const e = $('#err'); e.style.display = 'block'; e.textContent = m; };
 
-  // ---- gömülü wasm'ı çöz ve başlat ----
+  // ---- decode and instantiate embedded wasm ----
   let ex;
   try {
-    const bayt = Uint8Array.from(atob(WASM_B64), c => c.charCodeAt(0));
-    ex = (await WebAssembly.instantiate(bayt, {})).instance.exports;
-  } catch (e) { return err('WASM başlatılamadı: ' + e.message); }
+    const bytes = Uint8Array.from(atob(WASM_B64), c => c.charCodeAt(0));
+    ex = (await WebAssembly.instantiate(bytes, {})).instance.exports;
+  } catch (e) { return err('WASM init failed: ' + e.message); }
 
-  // ---- tuval ----
+  // ---- canvas ----
   const W = ex.fb_w(), H = ex.fb_h(), fbp = ex.fb_ptr();
   const cv = $('#cv'); cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
   const img = ctx.createImageData(W, H);
 
-  // ---- girdi: klavye (sadece bakış — hareket yok) ----
-  // bitler: 64-512 → bakış (ok tuşları)
+  // ---- input: keyboard (look only — no movement) ----
+  // bits: 64-512 → look (arrow keys)
   let keys = 0;
   const map = { ArrowLeft:64, ArrowRight:128, ArrowUp:256, ArrowDown:512 };
   addEventListener('keydown', e => {
@@ -94,7 +94,7 @@ const WASM_B64="AGFzbQEAAAABGgVgAAF/YAF/AGACfX0AYAJ9fwBgBH9/f38AAwoJAAAAAQAAAgME
   });
   addEventListener('keyup', e => { if (e.code in map) keys &= ~map[e.code]; });
 
-  // ---- girdi: fare + dokunmatik sürükleme → etrafına bak ----
+  // ---- input: mouse + touch drag → look around ----
   let dragId = null, lx = 0, ly = 0;
   cv.addEventListener('pointerdown', e => {
     dragId = e.pointerId; lx = e.clientX; ly = e.clientY;
@@ -103,21 +103,21 @@ const WASM_B64="AGFzbQEAAAABGgVgAAF/YAF/AGACfX0AYAJ9fwBgBH9/f38AAwoJAAAAAQAAAgME
   });
   cv.addEventListener('pointermove', e => {
     if (e.pointerId !== dragId) return;
-    const olcek = W / cv.getBoundingClientRect().width;    // CSS ölçeğini telafi et
-    ex.drag((e.clientX - lx) * olcek, (e.clientY - ly) * olcek);
+    const scale = W / cv.getBoundingClientRect().width;    // compensate for CSS scaling
+    ex.drag((e.clientX - lx) * scale, (e.clientY - ly) * scale);
     lx = e.clientX; ly = e.clientY;
   });
-  const birak = e => { if (e.pointerId === dragId) dragId = null; };
-  cv.addEventListener('pointerup', birak);
-  cv.addEventListener('pointercancel', birak);
+  const release = e => { if (e.pointerId === dragId) dragId = null; };
+  cv.addEventListener('pointerup', release);
+  cv.addEventListener('pointercancel', release);
 
-  // ---- kalite & animasyon düğmeleri ----
+  // ---- quality & animation buttons ----
   let autoQ = true;
   const qBtns = [...document.querySelectorAll('[data-q]')];
-  function setQ(q, oto) {
-    ex.set_quality(q); autoQ = oto;
-    qBtns.forEach(b => b.classList.toggle('on', +b.dataset.q === ex.get_quality() && !oto));
-    $('#autoQ').classList.toggle('on', oto);
+  function setQ(q, isAuto) {
+    ex.set_quality(q); autoQ = isAuto;
+    qBtns.forEach(b => b.classList.toggle('on', +b.dataset.q === ex.get_quality() && !isAuto));
+    $('#autoQ').classList.toggle('on', isAuto);
   }
   qBtns.forEach(b => b.onclick = () => setQ(+b.dataset.q, false));
   $('#autoQ').onclick = () => setQ(ex.get_quality(), true);
@@ -125,32 +125,32 @@ const WASM_B64="AGFzbQEAAAABGgVgAAF/YAF/AGACfX0AYAJ9fwBgBH9/f38AAwoJAAAAAQAAAgME
   function setAnim(a) { $('#animBtn').classList.toggle('on', !!a); }
   $('#animBtn').onclick = () => setAnim(ex.toggle_anim());
 
-  // dokunmatikte düşük kaliteyle başla; "oto" gerisini ayarlar
+  // start at low quality on touchscreens; "auto" adjusts the rest
   setQ(matchMedia('(pointer: coarse)').matches ? 3 : 2, true);
 
-  // ---- ana döngü ----
-  let son = performance.now(), topla = 0, n = 0;
-  function dongu(t) {
-    const dt = Math.min((t - son) / 1000, 0.05); son = t;
+  // ---- main loop ----
+  let last = performance.now(), accum = 0, n = 0;
+  function loop(t) {
+    const dt = Math.min((t - last) / 1000, 0.05); last = t;
 
-    ex.frame(dt, keys);                                    // ← tüm pikseller burada hesaplanır
+    ex.frame(dt, keys);                                    // ← all pixels computed here
     img.data.set(new Uint8ClampedArray(ex.memory.buffer, fbp, W * H * 4));
     ctx.putImageData(img, 0, 0);
 
-    topla += dt; n++;
-    if (topla >= 0.5) {                                    // FPS + otomatik kalite
-      const fps = n / topla;
+    accum += dt; n++;
+    if (accum >= 0.5) {                                    // FPS + auto quality
+      const fps = n / accum;
       $('#fps').textContent = fps.toFixed(0) + ' FPS';
       if (autoQ) {
         const q = ex.get_quality();
         if (fps < 24 && q < 4) ex.set_quality(q + 1);
         else if (fps > 55 && q > 1) ex.set_quality(q - 1);
       }
-      topla = 0; n = 0;
+      accum = 0; n = 0;
     }
-    requestAnimationFrame(dongu);
+    requestAnimationFrame(loop);
   }
-  requestAnimationFrame(dongu);
+  requestAnimationFrame(loop);
 })();
 </script>
 </body>

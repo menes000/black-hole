@@ -1,33 +1,33 @@
 // ============================================================================
-//  render_wasm.cpp — KARA DELİK + CİSİM FIRLATMA (WebAssembly)
+//  render_wasm.cpp — BLACK HOLE + OBJECT LAUNCH (WebAssembly)
 //
-//  Kamera uzayda sabittir, başlangıçta kara deliğe bakar; sürükleyerek
-//  etrafına bakılır, tıklayınca o yönde cisim fırlatılır. (Damalı oda ve üç
-//  yansıtıcı küre ayrı demoya taşındı: oda_wasm.cpp / oda.html.)
-//  Gerçek fizikle render edilen bir Schwarzschild kara deliği:
+//  Camera is fixed in space, initially facing the black hole; drag to look
+//  around, click to launch an object in that direction. (Checkered room and
+//  three reflective spheres moved to a separate demo: oda_wasm.cpp / oda.html.)
+//  A physically rendered Schwarzschild black hole:
 //
-//   • Işık ışınları kara deliğin yakınında DÜZ GİTMEZ: genel göreliliğin
-//     null jeodezik denklemi adım adım entegre edilir:
-//         a = -(3/2)·h²·r̂/r⁴      (h = korunan açısal momentum, rs = 1 birim)
-//     Bu denklem d²u/dφ² + u = (3/2)·rs·u² Schwarzschild yörüngesinin
-//     birebir vektör hâlidir — foton küresi (r = 1.5·rs) ve kritik vurma
-//     parametresi b = (3√3/2)·rs kendiliğinden ortaya çıkar.
-//   • Olay ufku (r < rs): ışık kaçamaz → mutlak siyah.
-//   • Yığılma diski: iç kenarı ISCO'da (r = 3·rs). Parlaklık profili
-//     Shakura–Sunyaev (~r^-2.5), Kepler hızı v = √(rs/2r) ile:
-//       - Doppler ışıması  δ³  (yaklaşan taraf parlak/mavimsi)
-//       - kütleçekimsel kızıla kayma √(1 - rs/r)
-//   • Uzak ışınlar (b > 9·rs) için birinci dereceden kesin sapma α = 2·rs/b
-//     analitik uygulanır (hız için); yakın ışınlar tam entegre edilir.
-//   • Arka plan yıldızları merceklenmeyle yay biçiminde bükülür.
+//   • Light rays DO NOT travel straight near the black hole: the null geodesic
+//     equation from general relativity is integrated step by step:
+//         a = -(3/2)·h²·r̂/r⁴      (h = conserved angular momentum, rs = 1 unit)
+//     This equation is the exact vector form of d²u/dφ² + u = (3/2)·rs·u²
+//     Schwarzschild orbit — the photon sphere (r = 1.5·rs) and critical impact
+//     parameter b = (3√3/2)·rs emerge naturally.
+//   • Event horizon (r < rs): light cannot escape → absolute black.
+//   • Accretion disk: inner edge at ISCO (r = 3·rs). Brightness profile
+//     Shakura–Sunyaev (~r^-2.5), Kepler velocity v = √(rs/2r):
+//       - Doppler beaming  δ³  (approaching side bright/bluish)
+//       - gravitational redshift √(1 - rs/r)
+//   • Far rays (b > 9·rs) use first-order exact deflection α = 2·rs/b
+//     analytically (for speed); close rays fully integrated.
+//   • Background stars lensed into arcs around the black hole.
 //
-//  Yaklaştırma: disk geometrik olarak ince ve opaktır.
+//  Approximation: disk is geometrically thin and opaque.
 //
-//  SIFIR bağımlılık: SDL yok, stdlib yok, libm yok, Emscripten yok.
-//  Derleme: ./build.sh  (zig c++ -target wasm32-freestanding + base64 gömme)
+//  ZERO dependencies: no SDL, no stdlib, no libm, no Emscripten.
+//  Build: ./build.sh  (zig c++ -target wasm32-freestanding + base64 embedding)
 // ============================================================================
 
-#define EXPORT(isim) extern "C" __attribute__((export_name(isim), used))
+#define EXPORT(name) extern "C" __attribute__((export_name(name), used))
 
 typedef unsigned int  u32;
 typedef unsigned char u8;
@@ -39,7 +39,7 @@ extern "C" void* memcpy(void* d, const void* s, __SIZE_TYPE__ n){
     u8* p = (u8*)d; const u8* q = (const u8*)s; while(n--) *p++ = *q++; return d;
 }
 
-// ------------------------------------------------- mini matematik (libm yok)
+// ------------------------------------------------- mini math (no libm)
 static const float PI  = 3.14159265358979f;
 static const float TAU = 6.28318530717959f;
 
@@ -58,12 +58,12 @@ static float f_sin(float x){
 }
 static inline float f_cos(float x){ return f_sin(x + PI*0.5f); }
 
-static inline u32 wang(u32 h){               // tamsayı karma (yıldızlar için)
+static inline u32 wang(u32 h){               // integer hash (for stars)
     h = (h ^ 61u) ^ (h >> 16); h *= 9u; h ^= h >> 4;
     h *= 0x27d4eb2du; h ^= h >> 15; return h;
 }
 
-// ------------------------------------------------------------ vektör matematiği
+// ------------------------------------------------------------ vector math
 struct Vec3 { float x, y, z; };
 static inline Vec3  operator+(Vec3 a, Vec3 b){ return {a.x+b.x, a.y+b.y, a.z+b.z}; }
 static inline Vec3  operator-(Vec3 a, Vec3 b){ return {a.x-b.x, a.y-b.y, a.z-b.z}; }
@@ -87,62 +87,63 @@ static inline u32 packRGBA(Vec3 c){
     return 0xFF000000u | ((u32)b << 16) | ((u32)g << 8) | (u32)r;
 }
 
-// ------------------------------------------------------------ sahne durumu
-static const Vec3 camPos = {0.0f, 0.0f, 0.35f};   // KAMERA SABİT — hareket yok
-static float camYaw = PI, camPitch = 0.0f;        // başlangıçta kara deliğe bak (-z)
+// ------------------------------------------------------------ scene state
+static const Vec3 camPos = {0.0f, 0.0f, 0.35f};   // CAMERA FIXED — no movement
+static float camYaw = PI, camPitch = 0.0f;        // initially facing the black hole (-z)
 static int   animate = 1;
 static float animT   = 1.2f;
 static int   quality = 2;
 
-// ---- kara delik: rs = 1 birim olacak şekilde yerel ölçek ----
-static const float RS_W    = 4.0f;                  // Schwarzschild yarıçapı (dünya birimi) — 2x
-// Kara delik sabit durmaz: ikili sistemdeki gibi, eğik bir düzlemde yavaş
-// dairesel yörüngede dolanır (kamera, eş kütlenin çerçevesindedir).
-static Vec3 bhPos = {0.0f, 0.0f, -40.0f};           // anlık konum (updateScene günceller)
-static const Vec3  BH_CTR  = {0.0f, 0.0f, -40.0f};  // yörünge merkezi
-static const Vec3  ORB_E1  = {1.0f, 0.0f, 0.0f};    // yörünge düzlemi eksenleri
-static const Vec3  ORB_E2  = {0.0f, 1.0f, 0.0f};    // tam dikey (kameraya bakan simetrik çember)
-static const float ORB_R   = 8.0f;                 // yörünge yarıçapı
-static const float ORB_W   = 0.15f;                 // açısal hız (tam tur ≈ 42 sn)
-static const float DISK_IN = 3.0f;                  // ISCO: kararlı son yörünge = 3·rs
+// ---- black hole: local scale so rs = 1 unit ----
+static const float RS_W    = 4.0f;                  // Schwarzschild radius (world units) — 2x
+// The black hole doesn't stand still: like a binary system, it slowly orbits
+// in a tilted plane (camera is in the frame of the equal-mass companion).
+static Vec3 bhPos = {0.0f, 0.0f, -40.0f};           // current position (updateScene updates this)
+static const Vec3  BH_CTR  = {0.0f, 0.0f, -40.0f};  // orbit center
+static const Vec3  ORB_E1  = {1.0f, 0.0f, 0.0f};    // orbit plane axes
+static const Vec3  ORB_E2  = {0.0f, 1.0f, 0.0f};    // fully vertical (symmetric circle facing camera)
+static const float ORB_R   = 8.0f;                 // orbit radius
+static const float ORB_W   = 0.15f;                 // angular velocity (full turn ≈ 42 s)
+static const float DISK_IN = 3.0f;                  // ISCO: last stable orbit = 3·rs
 static const float DISK_OUT= 7.0f;
-static const Vec3  DISK_N  = {0.0995f, 0.9950f, 0.0f};   // disk normali (z-eğimi yok: alt/üst eşit görünür)
-static const Vec3  DISK_E1 = {0.9952f, -0.0978f, 0.0f};    // disk içi eksen (doku için)
+static const Vec3  DISK_N  = {0.0995f, 0.9950f, 0.0f};   // disk normal (no z-tilt: top/bottom appear equal)
+static const Vec3  DISK_E1 = {0.9952f, -0.0978f, 0.0f};    // disk inner axis (for texture)
 
-static Vec3 bhVel = {0.0f, 0.0f, 0.0f};            // dünya birimi/sn (cisim fırlatmada çerçeve düzeltmesi)
+static Vec3 bhVel = {0.0f, 0.0f, 0.0f};            // world units/s (frame correction when launching objects)
 
 static void updateScene(float dt){
     if(animate) animT += dt;
-    // kara delik yörüngesi: yana + yukarı-aşağı yavaş döngü
+    // black hole orbit: sideways + slow up-down loop
     float a = animT * ORB_W;
     bhPos = BH_CTR + ORB_E1*(ORB_R*f_cos(a)) + ORB_E2*(ORB_R*f_sin(a));
     bhVel = animate ? (ORB_E1*(-f_sin(a)) + ORB_E2*f_cos(a))*(ORB_R*ORB_W) : Vec3{0,0,0};
 }
 
-// ===================================== FIRLATILAN CİSİMLER (tıkla & izle) ====
-// Ekrana tıklayınca o pikselin ışını yönünde kameradan cisim fırlatılır.
-// Cisimler kara delik çerçevesinde (rs=1, c=1) kütleli parçacık jeodeziğiyle
-// hareket eder, gelgit kuvvetiyle spagettileşir, ufka düşünce sönüp yok olur.
+// ===================================== LAUNCHED OBJECTS (click & watch) ====
+// Clicking the screen launches an object from the camera in the ray direction
+// of that pixel. Objects move under massive-particle geodesics in the black
+// hole frame (rs=1, c=1), spaghettify from tidal forces, and fade out as they
+// cross the horizon.
 
 static const int   MAX_OBJ    = 20;
-static const float OBJ_R      = 0.15f;   // taban yarıçap (rs birimi; 0.6 dünya b.)
-static const float V0         = 0.28f;   // fırlatma hızı (c). KD'den uzağa nişanlı köşe
-                                         // tıklamada h≈2.2 → peri≈4rs → kalıcı yörünge;
-                                         // merkeze yakın tıklamada h<2 → dalış.
-                                         // E<0 (bağlı), apoapsis ≈ 33rs → geri döner
-static const float SPAWN_DIST = 2.0f;    // kameranın ne kadar önünden çıkar (dünya b.)
-static const float TIME_SCALE = 12.0f;   // fizik zamanı (rs/c) / duvar saati saniyesi
-                                         // (yörünge turu ~40sn, merkez dalışı ~2sn)
-static const float KILL_R     = 1.03f;   // bu yarıçapta cisim silinir (rs)
-static const float K_DOP      = 2.0f;    // Doppler ton kazancı
+static const float OBJ_R      = 0.15f;   // base radius (rs units; 0.6 world units)
+static const float V0         = 0.28f;   // launch speed (c). Corner click aimed away from BH
+                                         // h≈2.2 → peri≈4rs → stable orbit;
+                                         // click near center h<2 → plunge.
+                                         // E<0 (bound), apoapsis ≈ 33rs → returns
+static const float SPAWN_DIST = 2.0f;    // how far in front of camera it spawns (world units)
+static const float TIME_SCALE = 12.0f;   // physics time (rs/c) / wall-clock second
+                                         // (orbit period ~40s, central plunge ~2s)
+static const float KILL_R     = 1.03f;   // object removed at this radius (rs)
+static const float K_DOP      = 2.0f;    // Doppler color gain
 
 struct Obj {
-    Vec3  posR, velR;          // KD-merkezli konum (rs) ve hız (c) — bhPos hareketli!
-    Vec3  col;                 // taban renk
+    Vec3  posR, velR;          // BH-centered position (rs) and velocity (c) — bhPos moves!
+    Vec3  col;                 // base color
     float age;
     int   alive;
-    float r, stretch, bound;   // kare başı önbellek (updateObjects doldurur)
-    Vec3  axis;                // KD'ye bakan birim uzun eksen
+    float r, stretch, bound;   // per-frame cache (updateObjects fills this)
+    Vec3  axis;                // unit long axis pointing toward BH
 };
 static Obj objs[MAX_OBJ];
 static int nAlive = 0;
@@ -153,9 +154,9 @@ static const Vec3 PALETTE[8] = {
     {1.00f,0.55f,0.15f},{0.75f,0.55f,1.00f},{0.55f,1.00f,0.95f},{1.00f,0.95f,0.80f},
 };
 
-// Schwarzschild kütleli parçacık ivmesi (rs=1, c=1):
+// Schwarzschild massive-particle acceleration (rs=1, c=1):
 //   a = -(1/(2r²) + (3/2)·h²/r⁴)·r̂ ,  h = |p×v|
-// ISCO=3rs, foton küresi davranışı ve h<2'de yakalanma kendiliğinden çıkar.
+// ISCO=3rs, photon sphere behavior, and capture at h<2 emerge naturally.
 static Vec3 objAccel(Vec3 p, Vec3 v){
     float r2 = dot(p, p), r = f_sqrt(r2);
     Vec3 hv = cross(p, v);
@@ -169,7 +170,7 @@ static void updateObjects(float dt){
         Obj& o = objs[i];
         if(!o.alive) continue;
         o.age += dt;
-        float t = 0.0f;                               // velocity-Verlet, uyarlanır alt adım
+        float t = 0.0f;                               // velocity-Verlet, adaptive sub-step
         for(int s = 0; s < 48 && t < T; s++){
             float r = len(o.posR);
             if(r < KILL_R || r > 60.0f){ o.alive = 0; break; }
@@ -179,10 +180,10 @@ static void updateObjects(float dt){
             o.posR = o.posR + o.velR*h + a0*(0.5f*h*h);
             Vec3 a1 = objAccel(o.posR, o.velR);
             o.velR = o.velR + (a0 + a1)*(0.5f*h);
-            // Gelgit sürtünmesi: gölgeyi sıyıran geçişlerde (r<3.2rs) cisim gelgit
-            // ısınmasıyla enerji yitirir → "çok yakın geçip kaçma" olmaz; sıyıran
-            // cisim her turda biraz düşer, 2-4 geçişte kapılır. peri≥4rs yörüngeler
-            // bölgeye hiç girmediğinden kalıcı kalır.
+            // Tidal drag: objects passing near the shadow (r<3.2rs) lose energy via
+            // tidal heating → no "very close flyby escape"; grazing objects spiral
+            // down a bit each pass, captured in 2-4 passes. Orbits with peri≥4rs
+            // never enter this region and remain stable.
             if(r < 3.2f){
                 float drag = (3.2f - r)*0.11f;
                 o.velR = o.velR*(1.0f - f_min(drag*h, 0.5f));
@@ -194,7 +195,7 @@ static void updateObjects(float dt){
         if(r < KILL_R || r > 60.0f){ o.alive = 0; continue; }
         o.r    = r;
         o.axis = norm(o.posR)*-1.0f;
-        // gelgit uzaması: r≥5rs'te küre, r≈1.3rs'te ~5x spagetti
+        // tidal stretching: sphere at r≥5rs, ~5x spaghetti at r≈1.3rs
         float k   = clampf((5.0f - r)/3.7f, 0.0f, 1.0f);
         o.stretch = 1.0f + 4.0f*k*k;
         o.bound   = OBJ_R*o.stretch + 0.02f;
@@ -202,8 +203,8 @@ static void updateObjects(float dt){
     }
 }
 
-// Işın/segment – elipsoid kesişimi (KD-merkezli rs uzayı, d birim olmalı).
-// Uzun eksen KD'yi gösterir; yarı eksenler (R·s, R/√s, R/√s) → hacim ~korunur.
+// Ray/segment – ellipsoid intersection (BH-centered rs space, d must be unit).
+// Long axis points toward BH; semi-axes (R·s, R/√s, R/√s) → volume ~conserved.
 static bool hitObj(const Obj& o, Vec3 p0, Vec3 d, float tmax, float& t, Vec3& n){
     Vec3 u  = o.axis;
     Vec3 w1 = norm(cross(u, (u.x*u.x < 0.9f) ? Vec3{1,0,0} : Vec3{0,1,0}));
@@ -219,17 +220,17 @@ static bool hitObj(const Obj& o, Vec3 p0, Vec3 d, float tmax, float& t, Vec3& n)
     float t0 = (-B - q)/A, t1 = (-B + q)/A;
     t = t0 > 1e-4f ? t0 : t1;
     if(t < 1e-4f || t > tmax) return false;
-    Vec3 lp = lo + ld*t;                              // birim küre üstündeki nokta
+    Vec3 lp = lo + ld*t;                              // point on unit sphere
     n = norm(u*(lp.x/sL) + w1*(lp.y/sT) + w2*(lp.z/sT));
     return true;
 }
 
-// Cisim rengi: taban renk + üç katmanlı etki
-//  1) Doppler (istek gereği: KD'ye doğru → mavi, uzaklaşırken → kırmızı)
-//  2) kütleçekimsel kızıla kayma √(1−1/r) ile sönme
-//  3) ufka yaklaşırken tam kararma (KILL_R'de ~0 → pat diye yok olmaz)
+// Object color: base color + three-layer effect
+//  1) Doppler (falling toward BH → blue, receding → red)
+//  2) attenuation by gravitational redshift √(1−1/r)
+//  3) full fade as horizon approaches (~0 at KILL_R, no sudden pop)
 static Vec3 objColor(const Obj& o, Vec3 n, Vec3 d){
-    float vr = dot(o.velR, norm(o.posR));             // >0: KD'den uzaklaşıyor
+    float vr = dot(o.velR, norm(o.posR));             // >0: receding from BH
     Vec3 c = o.col;
     c = lerp3(c, {0.45f,0.65f,1.00f}, clampf(-vr*K_DOP, 0.0f, 0.7f));
     c = lerp3(c, {1.00f,0.40f,0.25f}, clampf( vr*K_DOP, 0.0f, 0.7f));
@@ -239,24 +240,24 @@ static Vec3 objColor(const Obj& o, Vec3 n, Vec3 d){
     return c * (lum * gz * fade);
 }
 
-// Işın başına aday ön filtresi: düz çizgiye uzak cisimler elenir ki 320 adımlık
-// jeodezik yürüyüşü cisim başına test yapmasın. margin, küçük vurma parametreli
-// (çok bükülen) ışınlar için pay bırakır; [t0,t1] penceresi yürüyüş sırasında
-// yalnız cisme yakın yol diliminde test yapılmasını sağlar. Dönüş: aday sayısı.
+// Per-ray candidate pre-filter: objects far from the straight line are culled
+// so the 320-step geodesic walk doesn't test every object per step. margin
+// accounts for rays with small impact parameter (heavily bent); [t0,t1] window
+// ensures intersection tests only along path segments near each object. Returns candidate count.
 struct Cand { int i; float t0, t1; };
 
 static int objCandidates(Vec3 p, Vec3 d, float b, Cand* out){
     int nc = 0;
-    float bend = 2.0f/f_max(b, 0.7f);                 // toplam Einstein sapması (rad)
+    float bend = 2.0f/f_max(b, 0.7f);                 // total Einstein deflection (rad)
     for(int i = 0; i < MAX_OBJ; i++){
         if(!objs[i].alive) continue;
         Vec3 rel = objs[i].posR - p;
         float tca = dot(rel, d);
-        if(tca < -(objs[i].bound + 0.5f)) continue;   // tamamen geride
+        if(tca < -(objs[i].bound + 0.5f)) continue;   // fully behind
         float m2 = dot(rel, rel) - tca*tca;
-        // KRİTİK: ışın en yakın geçişten sonra KD'ye doğru kayar; düz çizgiden
-        // sapma ≈ bükülme·yol olur. Pay buna göre ölçeklenmezse uçuştaki cisim
-        // "çizgiden uzak" diye elenir ve ekranda bir anda görünmez olur.
+        // CRITICAL: ray curves toward BH after closest approach; straight-line
+        // deviation ≈ bend·path. Without scaling the margin, an object in flight
+        // gets culled as "too far from line" and suddenly disappears on screen.
         float lim = objs[i].bound + 0.5f + bend*f_max(tca, 0.0f);
         if(m2 < lim*lim){
             float slack = 2.0f + 0.6f*bend*f_max(tca, 0.0f);
@@ -266,83 +267,82 @@ static int objCandidates(Vec3 p, Vec3 d, float b, Cand* out){
     return nc;
 }
 
-// ============================================================ YILDIZLAR ====
-// Yön vektörü hücrelere bölünür; her hücrede karma ile seyrek yıldız üretilir.
-// Merceklenmiş ışınlar bükülmüş yönle örneklediği için yıldızlar kara deliğin
-// çevresinde yay biçiminde uzar.
+// ====================================================== STARS ====
+// Direction vector split into cells; sparse stars generated per cell by hash.
+// Lensed rays sample with bent direction, so stars arc around the black hole.
 
 static Vec3 stars(Vec3 d){
     Vec3 c = {0, 0, 0};
     float scl = 24.0f;
-    for(int katman = 0; katman < 2; katman++, scl *= 2.3f){
+    for(int layer = 0; layer < 2; layer++, scl *= 2.3f){
         float gx = d.x*scl, gy = d.y*scl, gz = d.z*scl;
         int ix = (int)f_floor(gx), iy = (int)f_floor(gy), iz = (int)f_floor(gz);
-        u32 h = wang((u32)ix*73856093u ^ (u32)iy*19349663u ^ (u32)iz*83492791u ^ (u32)katman*2654435769u);
-        if((h & 7u) == 0u){                          // her 8 hücreden birinde yıldız
-            float sx = ((h >>  8) & 255u) / 255.0f;  // hücre içi rastgele konum
+        u32 h = wang((u32)ix*73856093u ^ (u32)iy*19349663u ^ (u32)iz*83492791u ^ (u32)layer*2654435769u);
+        if((h & 7u) == 0u){                          // star in 1 of 8 cells
+            float sx = ((h >>  8) & 255u) / 255.0f;  // random position within cell
             float sy = ((h >> 16) & 255u) / 255.0f;
             float sz = ((h >> 24) & 255u) / 255.0f;
             float fx = gx - ix - sx, fy = gy - iy - sy, fz = gz - iz - sz;
             float d2 = fx*fx + fy*fy + fz*fz;
             float br = 1.35f*(0.35f + 0.65f*((h >> 5) & 7u) / 7.0f) * f_max(0.0f, 1.0f - d2*55.0f);
-            float t  = ((h >> 11) & 3u) / 3.0f;      // hafif renk sıcaklığı çeşidi
+            float t  = ((h >> 11) & 3u) / 3.0f;      // slight color temperature variety
             c = c + Vec3{br*(0.75f + 0.25f*t), br*0.85f, br*(1.0f - 0.25f*t)};
         }
     }
     return c;
 }
 
-// ====================================================== YIĞILMA DİSKİ ====
-static Vec3 diskColor(Vec3 p, Vec3 d, float rd){     // p: kesişim (rs biriminde), d: foton yönü
-    // Kepler dolanım hızı (c=1, GM=rs/2): v = sqrt(1/(2r))
+// ====================================================== ACCRETION DISK ====
+static Vec3 diskColor(Vec3 p, Vec3 d, float rd){     // p: intersection (rs units), d: photon direction
+    // Kepler orbital velocity (c=1, GM=rs/2): v = sqrt(1/(2r))
     float v   = f_sqrt(0.5f/rd);
-    Vec3 tang = norm(cross(DISK_N, p));              // dolanım yönü (teğet)
+    Vec3 tang = norm(cross(DISK_N, p));              // orbital direction (tangent)
     float gam = 1.0f / f_sqrt(1.0f - v*v);
-    // Gözlemciye Doppler çarpanı: foton kameraya -d yönünde gider
+    // Doppler factor toward observer: photon travels in -d direction toward camera
     float dop = 1.0f / (gam * (1.0f + v*dot(tang, d)));
-    float gz  = f_sqrt(1.0f - 1.0f/rd);              // kütleçekimsel kızıla kayma
-    // Shakura–Sunyaev tarzı parlaklık profili: (r_in/r)^2.5
+    float gz  = f_sqrt(1.0f - 1.0f/rd);              // gravitational redshift
+    // Shakura–Sunyaev brightness profile: (r_in/r)^2.5
     float xr  = DISK_IN/rd;
     float prof = xr*xr*f_sqrt(xr);
-    // içe doğru süzülen halka dokusu (diferansiyel dönme hissi)
-    float dalga = 0.82f + 0.13f*f_sin(rd*6.0f - animT*1.6f) + 0.05f*f_sin(rd*19.0f + animT*0.7f);
-    // kenar yumuşatma
-    float kenar = f_min(1.0f, (rd - DISK_IN)*2.2f) * f_min(1.0f, (DISK_OUT - rd)*0.9f);
-    float I = 4.2f * prof * dop*dop*dop * gz*gz*gz * dalga * kenar;
-    // sıcaklık gradyanı: içte akkor beyaz → dışta turuncu-kızıl
-    Vec3 renk = lerp3({1.00f, 0.97f, 0.92f}, {1.00f, 0.42f, 0.10f},
+    // inward-drifting ring texture (differential rotation feel)
+    float wave = 0.82f + 0.13f*f_sin(rd*6.0f - animT*1.6f) + 0.05f*f_sin(rd*19.0f + animT*0.7f);
+    // edge softening
+    float edge = f_min(1.0f, (rd - DISK_IN)*2.2f) * f_min(1.0f, (DISK_OUT - rd)*0.9f);
+    float I = 4.2f * prof * dop*dop*dop * gz*gz*gz * wave * edge;
+    // temperature gradient: inner incandescent white → outer orange-red
+    Vec3 col = lerp3({1.00f, 0.97f, 0.92f}, {1.00f, 0.42f, 0.10f},
                       clampf((rd - DISK_IN)/(DISK_OUT - DISK_IN), 0.0f, 1.0f));
-    // maviye kayma: yaklaşan taraf hafif beyaz-mavi
-    renk = lerp3(renk, {0.75f, 0.88f, 1.0f}, clampf((dop - 1.0f)*0.9f, 0.0f, 0.55f));
-    return renk * I;
+    // blueshift: approaching side slightly white-blue
+    col = lerp3(col, {0.75f, 0.88f, 1.0f}, clampf((dop - 1.0f)*0.9f, 0.0f, 0.55f));
+    return col * I;
 }
 
-// ================================================== KARA DELİK İZLEME ====
+// ================================================== BLACK HOLE TRACING ====
 static Vec3 traceBH(Vec3 oW, Vec3 dW){
-    Vec3 p = (oW - bhPos) * (1.0f/RS_W);            // rs = 1 birimine geç
+    Vec3 p = (oW - bhPos) * (1.0f/RS_W);            // convert to rs = 1 units
     Vec3 d = dW;
-    float b = len(cross(p, d));                      // vurma parametresi (ışının uzaklığı)
+    float b = len(cross(p, d));                      // impact parameter (ray's closest approach)
 
-    Cand cand[MAX_OBJ]; int nc = 0;                  // fırlatılan cisim adayları
+    Cand cand[MAX_OBJ]; int nc = 0;                  // launched object candidates
     if(nAlive) nc = objCandidates(p, d, b, cand);
 
-    if(b > 9.0f && nc == 0){                         // ZAYIF ALAN: analitik sapma
-        float tca = -dot(p, d);                      // (aday cisim varsa kısayol atlanır:
-        if(tca > 0.0f){                              //  yürüyüş cismi bükülmüş yolda yakalar)
-            Vec3 m = p + d*tca;                      // en yakın geçiş noktası (|m| = b)
-            d = norm(d - m*(2.0f/(b*b)));            // Einstein sapması: α = 2·rs/b
+    if(b > 9.0f && nc == 0){                         // WEAK FIELD: analytic deflection
+        float tca = -dot(p, d);                      // (skipped if candidate objects present:
+        if(tca > 0.0f){                              //  walk catches them on the bent path)
+            Vec3 m = p + d*tca;                      // closest approach point (|m| = b)
+            d = norm(d - m*(2.0f/(b*b)));            // Einstein deflection: α = 2·rs/b
         }
-        return stars(d);                             // b > disk yarıçapı → disk vurulamaz
+        return stars(d);                             // b > disk radius → can't hit disk
     }
 
-    float h2 = b*b;                                  // korunan açısal momentum karesi
-    float s  = 0.0f;                                 // kat edilen yol (pencere kırpması için)
+    float h2 = b*b;                                  // conserved angular momentum squared
+    float s  = 0.0f;                                 // path traveled (for window clipping)
     for(int i = 0; i < 320; i++){
         float r2 = dot(p, p), r = f_sqrt(r2);
-        if(r < 1.0f) return {0, 0, 0};               // OLAY UFKU: ışık kaçamaz
+        if(r < 1.0f) return {0, 0, 0};               // EVENT HORIZON: light cannot escape
         if(r > 60.0f && dot(p, d) > 0.0f){
             Vec3 du = norm(d);
-            if(nc){                                  // kaçarken yan yoldaki cisimler
+            if(nc){                                  // objects along the escape path
                 float bt = 1e30f, t; Vec3 nn, bn; int bi = -1;
                 for(int k = 0; k < nc; k++)
                     if(hitObj(objs[cand[k].i], p, du, bt, t, nn)){ bt = t; bn = nn; bi = cand[k].i; }
@@ -351,13 +351,13 @@ static Vec3 traceBH(Vec3 oW, Vec3 dW){
             return stars(du);
         }
 
-        float h  = clampf(0.14f*(r - 0.9f), 0.02f, 2.0f);   // uyarlanır adım
-        // Schwarzschild null jeodeziği: a = -(3/2)·h²·p/r⁵
+        float h  = clampf(0.14f*(r - 0.9f), 0.02f, 2.0f);   // adaptive step
+        // Schwarzschild null geodesic: a = -(3/2)·h²·p/r⁵
         Vec3 a  = p * (-1.5f*h2 / (r2*r2*r));
         Vec3 pn = p + d*h + a*(0.5f*h*h);
         Vec3 seg = pn - p;
 
-        // bu adım segmentinde cisim vuruşu? (kesir olarak en yakını)
+        // object hit in this step segment? (nearest, as fraction)
         float fObj = 2.0f; int oi = -1; Vec3 onrm = {0,0,0}, du = {0,0,0};
         if(nc){
             float L = len(seg);
@@ -366,9 +366,9 @@ static Vec3 traceBH(Vec3 oW, Vec3 dW){
                 float t; Vec3 nn;
                 for(int k = 0; k < nc; k++){
                     const Cand& ck = cand[k];
-                    if(s + L < ck.t0 || s > ck.t1) continue;   // pencere dışı
+                    if(s + L < ck.t0 || s > ck.t1) continue;   // outside window
                     const Obj& o = objs[ck.i];
-                    Vec3 rel = o.posR - p;            // hızlı ret: segmente uzak mı?
+                    Vec3 rel = o.posR - p;            // fast reject: too far from segment?
                     float tc = clampf(dot(rel, du), 0.0f, L);
                     Vec3 mm = rel - du*tc;
                     if(dot(mm, mm) > o.bound*o.bound) continue;
@@ -378,7 +378,7 @@ static Vec3 traceBH(Vec3 oW, Vec3 dW){
             s += L;
         }
 
-        // ince disk düzleminden geçiş?
+        // crossing thin disk plane?
         float fDisk = 2.0f; Vec3 dhit = {0,0,0}; float rdd = 0.0f;
         float s0 = dot(p, DISK_N), s1 = dot(pn, DISK_N);
         if(s0*s1 < 0.0f){
@@ -393,7 +393,7 @@ static Vec3 traceBH(Vec3 oW, Vec3 dW){
         d = d + a*h;
         p = pn;
     }
-    return {0, 0, 0};                                // foton küresinde dolanıp kaldı
+    return {0, 0, 0};                                // stuck orbiting the photon sphere
 }
 
 static const float FOV = 0.70020754f;                // tan(70°/2)
@@ -421,8 +421,8 @@ static void render(){
     }
 }
 
-// =================================================== JS'E AÇILAN ARAYÜZ ====
-// keys bit maskesi: 64=sol bak 128=sağ bak 256=yukarı bak 512=aşağı bak
+// =================================================== EXPORTED JS INTERFACE ====
+// keys bitmask: 64=look left 128=look right 256=look up 512=look down
 
 EXPORT("fb_ptr")  u32* fb_ptr(){ return fb; }
 EXPORT("fb_w")    int  fb_w(){ return W; }
@@ -432,38 +432,38 @@ EXPORT("set_quality") void set_quality(int q){ quality = q < 1 ? 1 : (q > 4 ? 4 
 EXPORT("get_quality") int  get_quality(){ return quality; }
 EXPORT("toggle_anim") int  toggle_anim(){ animate = !animate; return animate; }
 
-EXPORT("drag") void drag(float dx, float dy){        // fare/parmak: etrafına bak
+EXPORT("drag") void drag(float dx, float dy){        // mouse/touch: look around
     camYaw   += dx*0.004f;
     camPitch  = clampf(camPitch - dy*0.004f, -1.4f, 1.4f);
 }
 
-EXPORT("spawn") void spawn(float px, float py){      // tıklanan piksele cisim fırlat
+EXPORT("spawn") void spawn(float px, float py){      // launch object toward clicked pixel
     Vec3 fwd, rgt, up; camBasis(fwd, rgt, up);
     float u = (2.0f*(px + 0.5f)/W - 1.0f)*FOV;
     float v = (1.0f - 2.0f*(py + 0.5f)/H)*FOV;
     Vec3 dir = norm(fwd + rgt*u + up*v);
 
-    int s = 0; float oldest = -1.0f;                 // boş slot, yoksa en yaşlıyı geri dönüştür
+    int s = 0; float oldest = -1.0f;                 // empty slot, or recycle oldest
     for(int i = 0; i < MAX_OBJ; i++){
         if(!objs[i].alive){ s = i; break; }
         if(objs[i].age > oldest){ oldest = objs[i].age; s = i; }
     }
     Obj& o = objs[s];
     o.posR = (camPos + dir*SPAWN_DIST - bhPos)*(1.0f/RS_W);
-    o.velR = dir*V0 - bhVel*(1.0f/(RS_W*TIME_SCALE));   // KD çerçevesine geçiş
+    o.velR = dir*V0 - bhVel*(1.0f/(RS_W*TIME_SCALE));   // convert to BH frame
     o.col  = PALETTE[spawnCounter++ & 7u];
     o.age  = 0.0f; o.alive = 1;
-    o.r = len(o.posR); o.axis = norm(o.posR)*-1.0f;     // ilk kare için önbellek
+    o.r = len(o.posR); o.axis = norm(o.posR)*-1.0f;     // cache for first frame
     o.stretch = 1.0f;  o.bound = OBJ_R + 0.02f;
 }
 
-EXPORT("obj_alive") int obj_alive(){                 // canlı cisim sayısı (test/teşhis)
+EXPORT("obj_alive") int obj_alive(){                 // alive object count (testing/diagnostics)
     int n = 0;
     for(int i = 0; i < MAX_OBJ; i++) n += objs[i].alive ? 1 : 0;
     return n;
 }
 
-EXPORT("obj_r") float obj_r(int i){                  // i. cismin KD uzaklığı, rs (test/teşhis)
+EXPORT("obj_r") float obj_r(int i){                  // i-th object BH distance, rs (testing/diagnostics)
     return (i >= 0 && i < MAX_OBJ && objs[i].alive) ? objs[i].r : -1.0f;
 }
 
@@ -475,6 +475,6 @@ EXPORT("frame") void frame(float dt, int keys){
     if(keys & 512) camPitch -= 1.2f*dt;
     camPitch = clampf(camPitch, -1.4f, 1.4f);
     updateScene(dt);
-    updateObjects(dt);                               // cisimler animasyon kapalıyken de uçar
+    updateObjects(dt);                               // objects fly even when animation is off
     render();
 }
